@@ -13,6 +13,8 @@ Controller::Controller(dart::dynamics::SkeletonPtr _robot, dart::simulation::Wor
     // some useful pointers to robot limbs
     mLeftFoot = mRobot->getBodyNode("l_sole");
     mRightFoot = mRobot->getBodyNode("r_sole");
+    mLeftFoot_fts = mRobot->getBodyNode("l_sole");
+    mRightFoot_fts = mRobot->getBodyNode("r_sole");    
     mBase = mRobot->getBodyNode("base_link");
     mTorso = mRobot->getBodyNode("body");
 
@@ -50,6 +52,7 @@ Controller::Controller(dart::dynamics::SkeletonPtr _robot, dart::simulation::Wor
     // Instantiate MPC solver
     const Eigen::MatrixXd& ftsp_and_time_ref = ftsp_and_time;
     solver = new MPCSolver(ftsp_and_time_ref);
+    
     current.comPos = mBase->getCOM();
     current.comVel = mBase->getCOMLinearVelocity();
     current.comAcc = mBase->getCOMLinearAcceleration();
@@ -64,9 +67,12 @@ Controller::Controller(dart::dynamics::SkeletonPtr _robot, dart::simulation::Wor
     desired.rightFootOrient = Eigen::Vector3d(0.0, 0.0, 0.0);
     desired.comAcc = eta * eta * (desired.comPos - desired.zmpPos);
     current.disturbance << midrange_x, midrange_y, 0.0;
+    filtered_dist = Eigen::Vector2d(midrange_x, midrange_y);
     previousCoM = current.comPos;
-
-
+    zmp_buffer_box = Eigen::Vector2d::Zero(2);
+    zmp_buffer_filter = Eigen::Vector2d::Zero(2);
+    dist_bias = Eigen::Vector2d(-0.08, 0.07);
+    
     double ch = cosh(eta*mpcTimeStep);
     double sh = sinh(eta*mpcTimeStep);
     A_obs = Eigen::MatrixXd::Zero(4,4);
@@ -91,7 +97,20 @@ Controller::Controller(dart::dynamics::SkeletonPtr _robot, dart::simulation::Wor
                  26.18387,     0.03266,
                  -0.00000,     0.50000,
                 239.94774,     6.53262;
-                
+
+    remove("../data/x_RF.txt");
+    remove("../data/y_RF.txt");     
+    remove("../data/x.txt");
+    remove("../data/y.txt");    
+    remove("../data/x_m.txt");
+    remove("../data/y_m.txt");        
+    remove("../data/xz.txt");
+    remove("../data/yz.txt");    
+    remove("../data/xz_m_cop.txt");
+    remove("../data/yz_m_cop.txt");       
+    remove("../data/wx.txt");
+    remove("../data/wy.txt");   
+                                
     std::cout << "disturbance range is: " << std::endl;
     std::cout << "SIMULATION IS READY, PRESS THE SPACEBAR TO START!" << std::endl;
     std::cout << "   " << std::endl;    
@@ -103,13 +122,46 @@ Controller::~Controller() {}
 
 void Controller::update() {
 
+    auto visualShapeNodes = mTorso->getShapeNodesWith<VisualAspect>();
+
+    if(visualShapeNodes.size() == 2u )
+    {
+    //assert(visualShapeNodes[2]->getShape() == mArrow);
+        visualShapeNodes[1]->remove();
+    }
+    
+    if(visualShapeNodes.size() == 3u )
+    {
+    //assert(visualShapeNodes[2]->getShape() == mArrow);
+        visualShapeNodes[1]->remove();
+        visualShapeNodes[2]->remove();
+    }
+
+    if(visualShapeNodes.size() == 4u )
+    {
+    //assert(visualShapeNodes[2]->getShape() == mArrow);
+        visualShapeNodes[2]->remove();
+        visualShapeNodes[3]->remove();
+    }
+
+
     // stop the simulation at last_simulation_frame
     int last_simulation_frame = 3000;
     if (mWorld->getSimFrames() == last_simulation_frame) exit(1);
+   
+    if (mWorld->getSimFrames() == 2500) {
+       int stop = getchar();
+    }
 
     // start measuring the control routine execution time (just for check)
     auto start = std::chrono::high_resolution_clock::now();
-    
+
+   if (mWorld->getSimFrames() > wait + 700 && mWorld->getSimFrames() < wait + 1400 && false){
+       Eigen::Vector3d force = Eigen::Vector3d(0.0,0.0,0.0);
+       mBase->addExtForce(force); //(0.25*50,13,0)
+       drawArrow(0.02 * force);
+    }
+        
     /*
     if (mWorld->getSimFrames() > wait-10 ){
        mBase->addExtForce(Eigen::Vector3d(0.5*50.0,0,0)); //(0.25*50,13,0)
@@ -165,20 +217,27 @@ void Controller::update() {
     current.rightFootOrient = getRPY(mRightFoot);
 
     // luenberger observer
-    measured_state_x = Eigen::MatrixXd::Zero(2,1);
-    measured_state_y = Eigen::MatrixXd::Zero(2,1); 
+    
+    if (mWorld->getSimFrames() > wait) {
+	    measured_state_x = Eigen::MatrixXd::Zero(2,1);
+	    measured_state_y = Eigen::MatrixXd::Zero(2,1); 
 
-    measured_state_x << current.comPos(0) - 0.05, desired.zmpPos(0);
-    measured_state_y << current.comPos(1), desired.zmpPos(1);
-
-    if (mWorld->getSimFrames() > 10) {
-       desired.obsState_x << A_obs*desired.obsState_x + B_obs*desired.zmpDot(0) - G_obs*(C_obs*desired.obsState_x - measured_state_x);
-       desired.obsState_y << A_obs*desired.obsState_y + B_obs*desired.zmpDot(1) - G_obs*(C_obs*desired.obsState_y - measured_state_y);
+	    measured_state_x << current.comPos(0), getZmpFromExternalForces()(0);
+	    measured_state_y << current.comPos(1), getZmpFromExternalForces()(1);
+	     
+	    if (mWorld->getSimFrames() > 10) {
+	       desired.obsState_x << A_obs*desired.obsState_x + B_obs*desired.zmpDot(0) - G_obs*(C_obs*desired.obsState_x - measured_state_x);
+	       desired.obsState_y << A_obs*desired.obsState_y + B_obs*desired.zmpDot(1) - G_obs*(C_obs*desired.obsState_y - measured_state_y);
+	    }
+	    
+	    // store observed disturbance in the data structure that is passed to the MPC class
+	    desired.disturbance << desired.obsState_x(3), desired.obsState_y(3), 0.0;          
+	    current.disturbance << desired.obsState_x(3), desired.obsState_y(3), 0.0;  
+	    double alpha = 0.005;        
+	    filtered_dist << filtered_dist(0) + alpha * (desired.obsState_x(3) - filtered_dist(0)),
+	     		      filtered_dist(1) + alpha * (desired.obsState_y(3) - filtered_dist(1));
     }
     
-    // store observed disturbance in the data structure that is passed to the MPC class
-    desired.disturbance << desired.obsState_x(3), desired.obsState_y(3), 0.0;          
-
     // combine the measurements with the LIP model for quasi-closed loop behavior
     // do this after the robot starts walking
     if (((int) walkState.simulationTime) % 50 == 0 && walkState.footstepCounter > 2) {
@@ -221,7 +280,8 @@ void Controller::update() {
     }
     
     // Store the results in files (for plotting)
-    //storeData();
+    if (mWorld->getSimFrames() > wait) storeData();
+    
     // Arm swing
     ArmSwing();
     FixWaistToChestJoints();
@@ -377,26 +437,26 @@ Eigen::Vector3d Controller::getZmpFromExternalForces()
     bool right_contact = false;
 
     Eigen::Vector3d left_cop;
-    if(abs(mLeftFoot->getConstraintImpulse()[5]) > 0.01){
-        left_cop << -mLeftFoot->getConstraintImpulse()(1)/mLeftFoot->getConstraintImpulse()(5), mLeftFoot->getConstraintImpulse()(0)/mLeftFoot->getConstraintImpulse()(5), 0.0;
-        Eigen::Matrix3d iRotation = mLeftFoot->getWorldTransform().rotation();
-        Eigen::Vector3d iTransl   = mLeftFoot->getWorldTransform().translation();
+    if(abs(mLeftFoot_fts->getConstraintImpulse()[5]) > 0.01){
+        left_cop << -mLeftFoot_fts->getConstraintImpulse()(1)/mLeftFoot_fts->getConstraintImpulse()(5), mLeftFoot_fts->getConstraintImpulse()(0)/mLeftFoot_fts->getConstraintImpulse()(5), 0.0;
+        Eigen::Matrix3d iRotation = Eigen::MatrixXd::Identity(3,3); //mLeftFoot_fts->getWorldTransform().rotation();
+        Eigen::Vector3d iTransl   = mLeftFoot_fts->getWorldTransform().translation();
         left_cop = iTransl + iRotation*left_cop;
         left_contact = true;
     }
 
     Eigen::Vector3d right_cop;
-    if(abs(mRightFoot->getConstraintImpulse()[5]) > 0.01){
-        right_cop << -mRightFoot->getConstraintImpulse()(1)/mRightFoot->getConstraintImpulse()(5), mRightFoot->getConstraintImpulse()(0)/mRightFoot->getConstraintImpulse()(5), 0.0;
-        Eigen::Matrix3d iRotation = mRightFoot->getWorldTransform().rotation();
-        Eigen::Vector3d iTransl   = mRightFoot->getWorldTransform().translation();
+    if(abs(mRightFoot_fts->getConstraintImpulse()[5]) > 0.01){
+        right_cop << -mRightFoot_fts->getConstraintImpulse()(1)/mRightFoot_fts->getConstraintImpulse()(5), mRightFoot_fts->getConstraintImpulse()(0)/mRightFoot_fts->getConstraintImpulse()(5), 0.0;
+        Eigen::Matrix3d iRotation = Eigen::MatrixXd::Identity(3,3); //mRightFoot_fts->getWorldTransform().rotation();
+        Eigen::Vector3d iTransl   = mRightFoot_fts->getWorldTransform().translation();
         right_cop = iTransl + iRotation*right_cop;
         right_contact = true;
     }
 
     if(left_contact && right_contact){
-        zmp_v << (left_cop(0)*mLeftFoot->getConstraintImpulse()[5] + right_cop(0)*mRightFoot->getConstraintImpulse()[5])/(mLeftFoot->getConstraintImpulse()[5] + mRightFoot->getConstraintImpulse()[5]),
-                 (left_cop(1)*mLeftFoot->getConstraintImpulse()[5] + right_cop(1)*mRightFoot->getConstraintImpulse()[5])/(mLeftFoot->getConstraintImpulse()[5] + mRightFoot->getConstraintImpulse()[5]),
+        zmp_v << (left_cop(0)*mLeftFoot_fts->getConstraintImpulse()[5] + right_cop(0)*mRightFoot_fts->getConstraintImpulse()[5])/(mLeftFoot_fts->getConstraintImpulse()[5] + mRightFoot_fts->getConstraintImpulse()[5]),
+                 (left_cop(1)*mLeftFoot_fts->getConstraintImpulse()[5] + right_cop(1)*mRightFoot_fts->getConstraintImpulse()[5])/(mLeftFoot_fts->getConstraintImpulse()[5] + mRightFoot_fts->getConstraintImpulse()[5]),
 		 0.0;
     }else if(left_contact){
         zmp_v << left_cop(0), left_cop(1), 0.0;
@@ -406,7 +466,20 @@ Eigen::Vector3d Controller::getZmpFromExternalForces()
         // No contact detected
         zmp_v << 0.0, 0.0, 0.0;
     }
+    
+    double k = 0.35; double alpha = 0.25;
 
+    zmp_v(0) = zmp_v(0) >= zmp_buffer_box(0) + k * footConstraintSquareWidth/2.0 ? zmp_v(0) =  zmp_buffer_box(0) + k * footConstraintSquareWidth/2.0 : zmp_v(0);
+    zmp_v(0) = zmp_v(0) <= zmp_buffer_box(0) - k * footConstraintSquareWidth/2.0 ? zmp_v(0) =  zmp_buffer_box(0) - k * footConstraintSquareWidth/2.0 : zmp_v(0);    
+    zmp_v(1) = zmp_v(1) >= zmp_buffer_box(1) + k * footConstraintSquareWidth/2.0 ? zmp_v(1) =  zmp_buffer_box(1) + k * footConstraintSquareWidth/2.0 : zmp_v(1);
+    zmp_v(1) = zmp_v(1) <= zmp_buffer_box(1) - k * footConstraintSquareWidth/2.0 ? zmp_v(1) =  zmp_buffer_box(1) - k * footConstraintSquareWidth/2.0 : zmp_v(1);    
+    
+    
+    zmp_v(0) = zmp_buffer_box(0) + alpha * (zmp_v(0) - zmp_buffer_box(0));
+    zmp_v(1) = zmp_buffer_box(1) + alpha * (zmp_v(1) - zmp_buffer_box(1));
+            
+    zmp_buffer_box << zmp_v(0), zmp_v(1);
+    
     return zmp_v;
 }
 
@@ -464,11 +537,11 @@ void Controller::setInitialConfiguration() {
 void Controller::ArmSwing() {
 
   if (mWorld->getSimFrames() > wait) {
-    mRobot->setPosition(mRobot->getDof("R_SHOULDER_P")->getIndexInSkeleton(), (4-6*sin(2*M_PI*0.01*(mWorld->getSimFrames())/(2.0*(singleSupportDuration+doubleSupportDuration))))*M_PI/180 );   // 2.5 amplitude
-    mRobot->setPosition(mRobot->getDof("L_SHOULDER_P")->getIndexInSkeleton(), (4+6*sin(2*M_PI*0.01*(mWorld->getSimFrames())/(2.0*(singleSupportDuration+doubleSupportDuration))))*M_PI/180 );
+    mRobot->setPosition(mRobot->getDof("R_SHOULDER_P")->getIndexInSkeleton(), (4-6*sin(2*M_PI*0.01*(mWorld->getSimFrames())/(-2.0*(singleSupportDuration+doubleSupportDuration))))*M_PI/180 );   // 2.5 amplitude
+    mRobot->setPosition(mRobot->getDof("L_SHOULDER_P")->getIndexInSkeleton(), (4+6*sin(2*M_PI*0.01*(mWorld->getSimFrames())/(-2.0*(singleSupportDuration+doubleSupportDuration))))*M_PI/180 );
 
-    mRobot->setPosition(mRobot->getDof("R_ELBOW_P")->getIndexInSkeleton(), (-30-7*sin(2*M_PI*0.01*(mWorld->getSimFrames())/(2.0*(singleSupportDuration+doubleSupportDuration))))*M_PI/180 );   // 2.5 amplitude
-    mRobot->setPosition(mRobot->getDof("L_ELBOW_P")->getIndexInSkeleton(), (-30+7*sin(2*M_PI*0.01*(mWorld->getSimFrames())/(2.0*(singleSupportDuration+doubleSupportDuration))))*M_PI/180 );
+    mRobot->setPosition(mRobot->getDof("R_ELBOW_P")->getIndexInSkeleton(), (-30-7*sin(2*M_PI*0.01*(mWorld->getSimFrames())/(-2.0*(singleSupportDuration+doubleSupportDuration))))*M_PI/180 );   // 2.5 amplitude
+    mRobot->setPosition(mRobot->getDof("L_ELBOW_P")->getIndexInSkeleton(), (-30+7*sin(2*M_PI*0.01*(mWorld->getSimFrames())/(-2.0*(singleSupportDuration+doubleSupportDuration))))*M_PI/180 );
 }
 
 }
@@ -498,38 +571,44 @@ void Controller::storeData() {
 
      ofstream myfile;
 
-     myfile.open ("./Data/x_RF.txt",ios::app);
+     myfile.open ("../data/x_RF.txt",ios::app);
      myfile << mSupportFoot->getCOM()(0) <<endl; 
      myfile.close();
-     myfile.open ("./Data/y_RF.txt",ios::app);
+     myfile.open ("../data/y_RF.txt",ios::app);
      myfile << mSupportFoot->getCOM()(1) <<endl; 
      myfile.close();
 
-     myfile.open ("./Data/x_m.txt",ios::app);
+     myfile.open ("../data/x_m.txt",ios::app);
      myfile << COMPOS_meas(0) <<endl; 
      myfile.close();
-     myfile.open ("./Data/y_m.txt",ios::app);
+     myfile.open ("../data/y_m.txt",ios::app);
      myfile << COMPOS_meas(1) <<endl; 
      myfile.close();
-     myfile.open ("./Data/xz_m_cop.txt",ios::app);
+     myfile.open ("../data/xz_m_cop.txt",ios::app);
      myfile << ZMPPOS_meas_cop(0) <<endl; //current.zmpPos
      myfile.close();
-     myfile.open ("./Data/yz_m_cop.txt",ios::app);
+     myfile.open ("../data/yz_m_cop.txt",ios::app);
      myfile << ZMPPOS_meas_cop(1) <<endl; 
      myfile.close();
-     myfile.open ("./Data/x.txt",ios::app);
+     myfile.open ("../data/x.txt",ios::app);
      myfile << desired.comPos(0) <<endl; 
      myfile.close();
-     myfile.open ("./Data/y.txt",ios::app);
+     myfile.open ("../data/y.txt",ios::app);
      myfile << desired.comPos(1) <<endl; 
      myfile.close();
-     myfile.open ("./Data/xz.txt",ios::app);
+     myfile.open ("../data/xz.txt",ios::app);
      myfile << desired.zmpPos(0) <<endl; 
      myfile.close();
-     myfile.open ("./Data/yz.txt",ios::app);
+     myfile.open ("../data/yz.txt",ios::app);
      myfile << desired.zmpPos(1) <<endl; 
      myfile.close();
-
+     myfile.open ("../data/wx.txt",ios::app);
+     myfile << filtered_dist(0) + dist_bias(0) <<endl; 
+     myfile.close();
+     myfile.open ("../data/wy.txt",ios::app);
+     myfile << filtered_dist(1) + dist_bias(1) <<endl; 
+     myfile.close();
+     
 }
 
 void Controller::createForceLine()
@@ -553,21 +632,6 @@ void Controller::createForceLine()
   }
 
 void Controller::drawArrow(Eigen::Vector3d force){
-
-    auto visualShapeNodes = mTorso->getShapeNodesWith<VisualAspect>();
-
-    if(visualShapeNodes.size() == 3u )
-    {
-    //assert(visualShapeNodes[2]->getShape() == mArrow);
-        visualShapeNodes[2]->remove();
-    }
-
-    if(visualShapeNodes.size() == 4u )
-    {
-    //assert(visualShapeNodes[2]->getShape() == mArrow);
-        visualShapeNodes[2]->remove();
-        visualShapeNodes[3]->remove();
-    }
 
     std::shared_ptr<ArrowShape> mArrow;
     ArrowShape::Properties arrow_properties;

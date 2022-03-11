@@ -161,7 +161,7 @@ State MPCSolver::solve(State current, WalkState walkState, const Eigen::MatrixXd
     w_bar << solveQP_hpipm(cost_dist_x,f_dist_x,A_dist_x,b_dist_min_x,b_dist_max_x,0), 
              solveQP_hpipm(cost_dist_y,f_dist_y,A_dist_y,b_dist_min_y,b_dist_max_y,0);
              
-    std::cout << "current.disturbance " << current.disturbance.transpose() << std::endl;            
+    //std::cout << "current.disturbance " << current.disturbance.transpose() << std::endl;            
 
     //////// IMPLEMENT HERE IS-MPC //////////////
     //////////////////////////

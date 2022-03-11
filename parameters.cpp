@@ -8,9 +8,9 @@
 // Times
 const double mpcTimeStep = 0.01; //0.05;
 const double controlTimeStep = 0.01;
-const double singleSupportDuration = 0.6; //0.3
-const double doubleSupportDuration = 0.2; // 0.2
-const double predictionTime = 0.7;  //0.7
+const double singleSupportDuration = 0.75; //0.3
+const double doubleSupportDuration = 0.25; // 0.2
+const double predictionTime = 1.0;  //0.7
 const double previewTime = 2.5;
 
 // Disturbance
@@ -22,7 +22,7 @@ const double dist_range_y = 0.5;
 // Walk parameters
 const double stepHeight = 0.025; //0.03
 const double comTargetHeight = 0.71;
-const double kSwingFoot = 0.05; 
+const double kSwingFoot = 0.045; 
 
 // Constraints
 const double thetaMax = 0.30;

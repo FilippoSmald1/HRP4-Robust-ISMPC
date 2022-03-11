@@ -49,6 +49,8 @@ private:
   dart::simulation::WorldPtr mWorld;
   dart::dynamics::BodyNode* mLeftFoot;
   dart::dynamics::BodyNode* mRightFoot;
+  dart::dynamics::BodyNode* mLeftFoot_fts;
+  dart::dynamics::BodyNode* mRightFoot_fts;  
   dart::dynamics::BodyNode* mSupportFoot;
   dart::dynamics::BodyNode* mSwingFoot;
   dart::dynamics::BodyNode* mBase;
@@ -64,7 +66,7 @@ private:
 
   // matrices and vectors
   Eigen::MatrixXd ftsp_and_time;
-  Eigen::VectorXd dq;
+  Eigen::VectorXd dq, zmp_buffer_box, zmp_buffer_filter, filtered_dist, dist_bias;
   Eigen::MatrixXd A_obs;
   Eigen::VectorXd B_obs;
   Eigen::MatrixXd G_obs;
